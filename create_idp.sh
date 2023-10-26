@@ -1,152 +1,161 @@
 #!/bin/bash
 
-# Assicurati di essere loggato in OpenShift e di avere i permessi necessari
+# Ensure you are logged in to OpenShift and have the necessary permissions
 oc whoami &>/dev/null
 if [ $? -ne 0 ]; then
-  echo "Errore: Devi essere loggato in OpenShift."
+  echo "Error: You must be logged into OpenShift."
   exit 1
 fi
 
-# Variabili
+# Variables
 IDP_NAME="password"
 SECRET_NAME="htpasswd-secret"
 NAMESPACE="openshift-config"
-HTPASSWD_FILE="users.htpasswd"
+HTPASSWD_FILE="htpasswd"
 AUTHENTICATION_NAMESPACE="openshift-authentication"
 POD_LABEL="app=oauth-openshift"
 
-# Funzione per aggiungere un utente al ruolo cluster-admin
+# Function to extract htpasswd file from OpenShift secret
+extract_htpasswd() {
+  if oc get secret $SECRET_NAME -n $NAMESPACE &>/dev/null; then
+    echo "Extracting htpasswd file from secret..."
+    oc extract secret/$SECRET_NAME --to=. -n $NAMESPACE --confirm
+  else
+    echo "Secret not found in OpenShift. Creating an empty htpasswd file..."
+    touch $HTPASSWD_FILE
+  fi
+}
+
+# Function to add a user to the cluster-admin role
 add_cluster_admin() {
-  echo "Utenti esistenti:"
+  echo "Existing users:"
   awk -F: '{ print $1 }' $HTPASSWD_FILE
-  read -p "Inserisci il nome utente da aggiungere a cluster-admin: " username
-  # Verifica se l'utente esiste
+  read -p "Enter the username to add to cluster-admin: " username
+  # Check if the user exists
   if ! grep -q "^$username:" $HTPASSWD_FILE; then
-    echo "L'utente $username non esiste."
+    echo "The user $username does not exist."
     return
   fi
   oc adm policy add-cluster-role-to-user cluster-admin $username
-  echo "L'utente $username è stato aggiunto al ruolo cluster-admin."
+  echo "The user $username has been added to the cluster-admin role."
 }
 
-# Funzione per rimuovere un utente dal ruolo cluster-admin
+# Function to remove a user from the cluster-admin role
 remove_cluster_admin() {
-  read -p "Inserisci il nome utente da rimuovere da cluster-admin: " username
+  read -p "Enter the username to remove from cluster-admin: " username
   oc adm policy remove-cluster-role-from-user cluster-admin $username
-  echo "L'utente $username è stato rimosso dal ruolo cluster-admin."
+  echo "The user $username has been removed from the cluster-admin role."
 }
 
-# Funzione per gestire l'aggiunta di un nuovo utente
+# Function to handle adding a new user
 add_user() {
-  read -p "Inserisci il nome utente: " username
-  # Verifica se l'utente esiste già
+  read -p "Enter the username: " username
+  # Check if the user already exists
   if grep -q "^$username:" $HTPASSWD_FILE; then
-    read -p "L'utente esiste già. Vuoi aggiornare la password? (y/n): " update
+    read -p "The user already exists. Do you want to update the password? (y/n): " update
     if [ "$update" != "y" ]; then
-      echo "Operazione annullata."
+      echo "Operation cancelled."
       return
     fi
   fi
-  read -s -p "Inserisci la password: " password
+  read -s -p "Enter the password: " password
   echo
   htpasswd -B -b $HTPASSWD_FILE $username $password
 }
 
-# Funzione per gestire la rimozione di un utente
+# Function to handle removing a user
 remove_user() {
-  echo "Utenti esistenti:"
+  echo "Existing users:"
   awk -F: '{ print $1 }' $HTPASSWD_FILE
-  read -p "Inserisci il nome utente da rimuovere: " username
-  # Verifica se l'utente esiste
+  read -p "Enter the username to remove: " username
+  # Check if the user exists
   if ! grep -q "^$username:" $HTPASSWD_FILE; then
-    echo "L'utente $username non esiste."
+    echo "The user $username does not exist."
     return
   fi
   htpasswd -D $HTPASSWD_FILE $username
 }
 
-# Funzione per gestire la modifica della password di un utente
+# Function to handle changing a user's password
 change_password() {
-  echo "Utenti esistenti:"
+  echo "Existing users:"
   awk -F: '{ print $1 }' $HTPASSWD_FILE
-  read -p "Inserisci il nome utente per cui modificare la password: " username
-  # Verifica se l'utente esiste
+  read -p "Enter the username whose password you want to change: " username
+  # Check if the user exists
   if ! grep -q "^$username:" $HTPASSWD_FILE; then
-    echo "L'utente $username non esiste."
+    echo "The user $username does not exist."
     return
   fi
-  read -s -p "Inserisci la nuova password: " password
+  read -s -p "Enter the new password: " password
   echo
   htpasswd -b $HTPASSWD_FILE $username $password
 }
 
-
-# Controlla se l'IDP "password" esiste già
+# Check if the "password" IDP already exists
 idp_exists=$(oc get oauth cluster -o json | jq -r --arg IDP_NAME "$IDP_NAME" '.spec.identityProviders[]? | select(.name == $IDP_NAME)')
 
 if [ "$idp_exists" != "" ]; then
-  echo "L'IDP '$IDP_NAME' esiste già."
-  # Recupera il file htpasswd corrente dal secret
+
+ echo "The IDP '$IDP_NAME' already exists."
+  
+  # Extract htpasswd file from secret if it doesn't exist locally
+  if [ ! -f "$HTPASSWD_FILE" ]; then
+    extract_htpasswd
+  fi
+  
+# Retrieve the current htpasswd file from the secret
   oc extract secret/$SECRET_NAME --to=. -n $NAMESPACE --confirm
 
-  PS3="Scegli un'opzione: "
-  options=("Aggiungi un utente" "Rimuovi un utente" "Modifica la password di un utente" "Aggiungi un utente a cluster-admin" "Rimuovi un utente da cluster-admin" "Esci")
+  PS3="Choose an option: "
+  options=("Add a user" "Remove a user" "Change a user's password" "Add a user to cluster-admin" "Remove a user from cluster-admin" "Exit")
   select opt in "${options[@]}"
   do
     case $opt in
-      "Aggiungi un utente")
+      "Add a user")
         add_user
         ;;
-      "Rimuovi un utente")
+      "Remove a user")
         remove_user
         ;;
-      "Modifica la password di un utente")
+      "Change a user's password")
         change_password
         ;;
-      "Aggiungi un utente a cluster-admin")
+      "Add a user to cluster-admin")
         add_cluster_admin
         ;;
-      "Rimuovi un utente da cluster-admin")
+      "Remove a user from cluster-admin")
         remove_cluster_admin
         ;;
-      "Esci")
+      "Exit")
         break
         ;;
-      *) echo "Opzione non valida $REPLY";;
+      *) echo "Invalid option $REPLY";;
     esac
   done
 else
-  echo "Creazione dell'IDP '$IDP_NAME'..."
+echo "Creating the IDP '$IDP_NAME'..."
+  extract_htpasswd  # Attempt to extract htpasswd, in case it's a re-setup
   add_user
   oc create secret generic $SECRET_NAME --from-file=htpasswd=$HTPASSWD_FILE -n $NAMESPACE
-
-  # Crea l'IDP
-  oc apply -f - <<EOF
-apiVersion: config.openshift.io/v1
-kind: OAuth
-metadata:
-  name: cluster
-spec:
-  identityProviders:
-  - name: $IDP_NAME
-    challenge: true
-    login: true
-    mappingMethod: claim
-    type: HTPasswd
-    htpasswd:
-      fileData:
-        name: $SECRET_NAME
-EOF
-
-  echo "Configurazione completata con successo."
 fi
 
-# Aggiorna il secret in OpenShift con il file htpasswd aggiornato
+# Update the secret in OpenShift with the updated htpasswd file
 oc create secret generic $SECRET_NAME --from-file=htpasswd=$HTPASSWD_FILE -n $NAMESPACE --dry-run=client -o yaml | oc apply -f -
 
-echo "Operazione completata. In attesa che i pod di autenticazione si riavviino..."
+# Get the current OAuth configuration
+current_oauth_config=$(oc get oauth cluster -o json)
 
-# Attendi che i pod di autenticazione si riavviino
+# Update the specific IDP configuration
+updated_oauth_config=$(echo $current_oauth_config | jq --arg IDP_NAME "$IDP_NAME" --arg SECRET_NAME "$SECRET_NAME" '
+.spec.identityProviders[] |= (select(.name == $IDP_NAME) .htpasswd.fileData.name = $SECRET_NAME)')
+
+# Apply the updated configuration
+echo $updated_oauth_config | oc apply -f -
+
+echo "Operation completed. Waiting for authentication pods to restart..."
+
+# Wait for the authentication pods to restart
 oc get pods -n $AUTHENTICATION_NAMESPACE -l $POD_LABEL -w
 
-echo "I pod di autenticazione sono stati riavviati."
+echo "Authentication pods have restarted."
+
