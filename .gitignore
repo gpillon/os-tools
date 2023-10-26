@@ -1,2 +1,5 @@
 output/
 test_yaml/
+
+htpasswd
+users.htpasswd
